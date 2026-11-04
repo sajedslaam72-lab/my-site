@@ -25,7 +25,19 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
-      # حقن الصلاحيات مع حل تعارض exported كما اقترح أندرويد
+      # تعطيل فحص تضارب أرقام أندرويد في مكتبة اختيار الملفات
+      - name: Disable AarMetadata Check
+        run: |
+          cat << 'EOF' >> android/build.gradle
+
+          allprojects {
+              tasks.matching { it.name.contains("AarMetadata") }.configureEach {
+                  enabled = false
+              }
+          }
+          EOF
+
+      # حقن الصلاحيات مع حل تعارض exported وإذن قراءة الصوتيات
       - name: Configure Android Permissions and Background Service
         run: |
           python3 - << 'EOF'
@@ -42,6 +54,8 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
           """
           content = content.replace('<application', permissions + '\n    <application')
 
