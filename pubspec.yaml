@@ -1,0 +1,19 @@
+name: we_balance_app
+description: WE Balance Tracker
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_inappwebview: ^6.0.0
+  audioplayers: ^6.0.0
+  flutter_background_service: ^2.4.6
+  flutter_local_notifications: ^17.0.0
+  shared_preferences: ^2.2.2
+
+flutter:
+  uses-material-design: true
