@@ -25,11 +25,39 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
+      # حقن صلاحيات الخلفية والإنترنت لمنع كراش أندرويد 14+
+      - name: Configure Android Permissions and Background Service
+        run: |
+          python3 - << 'EOF'
+          path = 'android/app/src/main/AndroidManifest.xml'
+          with open(path, 'r') as f:
+              content = f.read()
+
+          permissions = """
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+          """
+          content = content.replace('<application', permissions + '\n    <application')
+
+          service_tag = """
+                  <service
+                      android:name="id.flutter.flutter_background_service.BackgroundService"
+                      android:foregroundServiceType="dataSync"
+                      android:exported="false" />
+          """
+          content = content.replace('</application>', service_tag + '\n    </application>')
+
+          with open(path, 'w') as f:
+              f.write(content)
+          EOF
+
       - name: Bypass Proguard Check
         run: |
           echo "android.r8.proguardAndroidTxt.disallowed=false" >> android/gradle.properties
 
-      # تفعيل ميزة الـ Desugaring لمكتبة الإشعارات
       - name: Enable Desugaring for Notifications
         run: |
           python3 - << 'EOF'
