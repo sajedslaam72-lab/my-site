@@ -25,13 +25,16 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
-      # حقن صلاحيات الخلفية والإنترنت لمنع كراش أندرويد 14+
+      # حقن الصلاحيات مع حل تعارض exported كما اقترح أندرويد
       - name: Configure Android Permissions and Background Service
         run: |
           python3 - << 'EOF'
           path = 'android/app/src/main/AndroidManifest.xml'
           with open(path, 'r') as f:
               content = f.read()
+
+          if 'xmlns:tools' not in content:
+              content = content.replace('<manifest', '<manifest xmlns:tools="http://schemas.android.com/tools"')
 
           permissions = """
               <uses-permission android:name="android.permission.INTERNET"/>
@@ -46,7 +49,8 @@ jobs:
                   <service
                       android:name="id.flutter.flutter_background_service.BackgroundService"
                       android:foregroundServiceType="dataSync"
-                      android:exported="false" />
+                      android:exported="true"
+                      tools:replace="android:exported" />
           """
           content = content.replace('</application>', service_tag + '\n    </application>')
 
