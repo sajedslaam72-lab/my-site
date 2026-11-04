@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:file_picker/file_picker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,26 +14,36 @@ void main() async {
   runApp(const WeBalanceApp());
 }
 
-// ---------------------------------------------------------------------------
-// إعداد خدمة الخلفية (Background Service)
-// ---------------------------------------------------------------------------
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+  // قناة الإشعار الدائم الصامت للخدمة
+  const AndroidNotificationChannel silentChannel = AndroidNotificationChannel(
     'we_balance_channel',
     'مراقب رصيد WE',
     description: 'تنبيهات وفحص رصيد WE الدوري',
-    importance: Importance.low, // low حتى لا يزعج بصوت كل تحديث
+    importance: Importance.low,
   );
 
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  // قناة إشعار الصفر القوي (Heads-up Notification ينزل فوق الشاشة)
+  const AndroidNotificationChannel zeroChannel = AndroidNotificationChannel(
+    'we_zero_balance_channel',
+    'تنبيه الرصيد صفر العاجل',
+    description: 'إشعار قوي جداً عند انتهاء الرصيد بالكامل',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
+  );
 
-  await flutterLocalNotificationsPlugin
+  final androidPlugin = flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
+          AndroidFlutterLocalNotificationsPlugin>();
+
+  await androidPlugin?.createNotificationChannel(silentChannel);
+  await androidPlugin?.createNotificationChannel(zeroChannel);
 
   await service.configure(
     androidConfiguration: AndroidConfiguration(
@@ -51,7 +63,6 @@ Future<void> initializeBackgroundService() async {
 void onStartBackgroundService(ServiceInstance service) async {
   final AudioPlayer audioPlayer = AudioPlayer();
 
-  // فحص دوري كل 15 دقيقة
   Timer.periodic(const Duration(minutes: 15), (timer) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -60,37 +71,68 @@ void onStartBackgroundService(ServiceInstance service) async {
       final trigger1 = prefs.getDouble('trigger1') ?? 4.0;
       final trigger2 = prefs.getDouble('trigger2') ?? 1.5;
 
-      // حالة التنبيهات السابقة لمنع تكرار الصوت في كل دورة
+      final soundPath1 = prefs.getString('sound_path_1');
+      final soundPath2 = prefs.getString('sound_path_2');
+
       bool alertedT1 = prefs.getBool('alerted_t1') ?? false;
       bool alertedT2 = prefs.getBool('alerted_t2') ?? false;
+      bool alertedZero = prefs.getBool('alerted_zero') ?? false;
 
       if (phone.isEmpty || password.isEmpty) return;
 
       final double balance = await fetchBalanceSecurely(phone, password);
 
       if (balance >= 0) {
-        // تحديث الرصيد المخزن
         await prefs.setDouble('last_balance', balance);
 
-        // منطق التنبيه الصوتي الذكي (ينبه مرة واحدة عند كسر الحد)
-        if (balance <= trigger2) {
+        // تنبيه الصفر العاجل اللي مينفعش يتسكت
+        if (balance <= 0.0) {
+          if (!alertedZero) {
+            await flutterLocalNotificationsPlugin.show(
+              999,
+              'تنبيه عاجل من WE ⚠️',
+              'أخويا الخياط رصيدك خلص وبقيت على البلاط 😂!',
+              const NotificationDetails(
+                android: AndroidNotificationDetails(
+                  'we_zero_balance_channel',
+                  'تنبيه الرصيد صفر العاجل',
+                  importance: Importance.max,
+                  priority: Priority.high,
+                  fullScreenIntent: true,
+                  playSound: true,
+                  enableVibration: true,
+                ),
+              ),
+            );
+            await prefs.setBool('alerted_zero', true);
+          }
+        } else {
+          await prefs.setBool('alerted_zero', false);
+        }
+
+        // تشغيل صوت التنبيه الثاني لو فوق الصفر وتحت الحد الثاني
+        if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
-            await audioPlayer.play(AssetSource('sounds/sound15.m4a'));
+            if (soundPath2 != null && File(soundPath2).existsSync()) {
+              await audioPlayer.play(DeviceFileSource(soundPath2));
+            }
             await prefs.setBool('alerted_t2', true);
             await prefs.setBool('alerted_t1', true);
           }
-        } else if (balance <= trigger1) {
+        } 
+        // تشغيل صوت التنبيه الأول
+        else if (balance <= trigger1 && balance > trigger2) {
           if (!alertedT1) {
-            await audioPlayer.play(AssetSource('sounds/sound4.m4a'));
+            if (soundPath1 != null && File(soundPath1).existsSync()) {
+              await audioPlayer.play(DeviceFileSource(soundPath1));
+            }
             await prefs.setBool('alerted_t1', true);
           }
-        } else {
-          // إذا شحن المستخدم رصيده وارتفع، نعيد تفعيل التنبيهات للمستقبل
+        } else if (balance > trigger1) {
           await prefs.setBool('alerted_t1', false);
           await prefs.setBool('alerted_t2', false);
         }
 
-        // تحديث الإشعار الدائم ببيانات حقيقية
         if (service is AndroidServiceInstance) {
           final now = DateTime.now();
           final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
@@ -100,15 +142,10 @@ void onStartBackgroundService(ServiceInstance service) async {
           );
         }
       }
-    } catch (_) {
-      // تفادي إيقاف السيرفس عند حدوث انقطاع في الشبكة
-    }
+    } catch (_) {}
   });
 }
 
-// ---------------------------------------------------------------------------
-// محرك جلب الرصيد عبر الـ Headless WebView المطور
-// ---------------------------------------------------------------------------
 Future<double> fetchBalanceSecurely(String phone, String password) async {
   final Completer<double> completer = Completer<double>();
   HeadlessInAppWebView? headlessWebView;
@@ -122,7 +159,6 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
     headlessWebView?.dispose();
   }
 
-  // كود جافاسكربت لحقن البيانات والضغط على الدخول
   final String loginJs = """
     (function() {
       function setVal(input, val) {
@@ -144,7 +180,6 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
     })();
   """;
 
-  // كود فحص الرصيد المتكرر حتى تحميل الـ Angular بالكامل
   final String scrapeJs = """
     (function() {
       var tries = 0;
@@ -159,7 +194,7 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
           clearInterval(interval);
           window.flutter_inappwebview.callHandler('onBalanceFound', el.innerText);
         }
-        if (tries > 25) { // توقف بعد 25 محاولة (حوالي 12 ثانية)
+        if (tries > 25) {
           clearInterval(interval);
           window.flutter_inappwebview.callHandler('onBalanceFound', null);
         }
@@ -174,10 +209,9 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
           "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
       javaScriptEnabled: true,
       domStorageEnabled: true,
-      cacheEnabled: false, // لضمان قراءة رصيد محدث
+      cacheEnabled: false,
     ),
     onWebViewCreated: (controller) {
-      // استقبال قيمة الرصيد من الـ JavaScript فور ظهورها بالصفحة
       controller.addJavaScriptHandler(
         handlerName: 'onBalanceFound',
         callback: (args) {
@@ -195,9 +229,7 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
     onLoadStop: (controller, url) async {
       final currentUrl = url?.toString() ?? "";
       if (currentUrl.contains("te.eg")) {
-        // تنفيذ تسجيل الدخول أولاً
         await controller.evaluateJavascript(source: loginJs);
-        // بدء متابعة ظهور الرصيد
         await controller.evaluateJavascript(source: scrapeJs);
       }
     },
@@ -206,7 +238,6 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
 
   await headlessWebView.run();
 
-  // إعطاء مهلة إجمالية 35 ثانية كحد أقصى للعملية بالكامل
   return completer.future.timeout(
     const Duration(seconds: 35),
     onTimeout: () {
@@ -216,9 +247,6 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
   );
 }
 
-// ---------------------------------------------------------------------------
-// واجهة المستخدم (UI)
-// ---------------------------------------------------------------------------
 class WeBalanceApp extends StatelessWidget {
   const WeBalanceApp({super.key});
 
@@ -253,6 +281,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final _trigger1Controller = TextEditingController(text: "4.0");
   final _trigger2Controller = TextEditingController(text: "1.5");
 
+  String? _sound1Path;
+  String? _sound2Path;
+  String? _sound1Name;
+  String? _sound2Name;
+
   double _currentBalance = 0.0;
   bool _isLoading = false;
   String _statusMessage = "جاهز وبانتظار البيانات";
@@ -261,7 +294,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _requestNotificationPermission();
     _loadSavedData();
+  }
+
+  // طلب إذن الإشعارات لأندرويد 13+
+  void _requestNotificationPermission() async {
+    final androidImplementation = flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    await androidImplementation?.requestNotificationsPermission();
   }
 
   void _loadSavedData() async {
@@ -272,7 +314,57 @@ class _HomeScreenState extends State<HomeScreen> {
       _trigger1Controller.text = (prefs.getDouble('trigger1') ?? 4.0).toString();
       _trigger2Controller.text = (prefs.getDouble('trigger2') ?? 1.5).toString();
       _currentBalance = prefs.getDouble('last_balance') ?? 0.0;
+
+      _sound1Path = prefs.getString('sound_path_1');
+      _sound2Path = prefs.getString('sound_path_2');
+      if (_sound1Path != null) _sound1Name = _sound1Path!.split('/').last;
+      if (_sound2Path != null) _sound2Name = _sound2Path!.split('/').last;
     });
+  }
+
+  Future<void> _pickAudioFile(int soundIndex) async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.audio,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        final path = result.files.single.path!;
+        final name = result.files.single.name;
+        final prefs = await SharedPreferences.getInstance();
+
+        setState(() {
+          if (soundIndex == 1) {
+            _sound1Path = path;
+            _sound1Name = name;
+            prefs.setString('sound_path_1', path);
+          } else {
+            _sound2Path = path;
+            _sound2Name = name;
+            prefs.setString('sound_path_2', path);
+          }
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("تم اختيار ملف: $name بنجاح!")),
+        );
+      }
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("حدث خطأ أثناء اختيار الملف")),
+      );
+    }
+  }
+
+  void _testAudio(int soundIndex) async {
+    final path = soundIndex == 1 ? _sound1Path : _sound2Path;
+    if (path != null && File(path).existsSync()) {
+      await _audioTester.play(DeviceFileSource(path));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("ارفع ملف صوتي الأول من الخانة اللي فوق عشان قيد التجربة!")),
+      );
+    }
   }
 
   Future<void> _saveAndCheckNow() async {
@@ -308,11 +400,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _statusMessage = "فشل جلب الرصيد! تحقق من النت أو صحة الباسورد.";
       }
     });
-  }
-
-  void _testAudio(int soundIndex) async {
-    final file = soundIndex == 1 ? 'sounds/sound4.m4a' : 'sounds/sound15.m4a';
-    await _audioTester.play(AssetSource(file));
   }
 
   @override
@@ -367,7 +454,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // تخصيص الحدود والتنبيهات
+            // تخصيص الحدود والتسجيلات
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -377,12 +464,26 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("إعدادات أصوات التنبيه",
+                  const Text("إعدادات أصوات التنبيه (تسجيلات دوبلي)",
                       style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
                   const SizedBox(height: 15),
-                  _buildTriggerField("الحد الأول (جنيه):", _trigger1Controller, 1),
-                  const Divider(height: 20, color: Colors.white10),
-                  _buildTriggerField("الحد الحرج (جنيه):", _trigger2Controller, 2),
+                  
+                  // التنبيه الأول: خانة الرفع فوق والمستطيل تحته بالظبط
+                  _buildCustomAudioTrigger(
+                    label: "مبلغ التنبيه الأول",
+                    controller: _trigger1Controller,
+                    soundIdx: 1,
+                    fileName: _sound1Name,
+                  ),
+                  const Divider(height: 28, color: Colors.white10),
+
+                  // التنبيه الثاني: خانة الرفع فوق والمستطيل تحته بالظبط
+                  _buildCustomAudioTrigger(
+                    label: "مبلغ التنبيه الثاني (الحرج)",
+                    controller: _trigger2Controller,
+                    soundIdx: 2,
+                    fileName: _sound2Name,
+                  ),
                 ],
               ),
             ),
@@ -422,9 +523,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 52,
                     child: ElevatedButton.icon(
                       onPressed: _isLoading ? null : _saveAndCheckNow,
-                      icon: _isLoading
-                          ? const SizedBox.shrink()
-                          : const Icon(Icons.sync),
+                      icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.sync),
                       label: _isLoading
                           ? const CircularProgressIndicator(color: Colors.white)
                           : const Text("حفظ وتحديث الرصيد الآن", style: TextStyle(fontSize: 16)),
@@ -444,25 +543,73 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildTriggerField(String title, TextEditingController controller, int soundIdx) {
-    return Row(
+  // التصميم المطلوب: خانة رفع الملف فوق المستطيل وزرار المكبر
+  Widget _buildCustomAudioTrigger({
+    required String label,
+    required TextEditingController controller,
+    required int soundIdx,
+    required String? fileName,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IconButton(
-          icon: Icon(Icons.volume_up, color: soundIdx == 1 ? Colors.purpleAccent : Colors.redAccent),
-          onPressed: () => _testAudio(soundIdx),
-          tooltip: "تجربة الصوت",
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: TextField(
-            controller: controller,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: title,
-              isDense: true,
-              border: const OutlineInputBorder(),
+        InkWell(
+          onTap: () => _pickAudioFile(soundIdx),
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF334155),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: fileName != null ? Colors.greenAccent : Colors.purple.withOpacity(0.4),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  fileName != null ? Icons.check_circle : Icons.upload_file,
+                  color: fileName != null ? Colors.greenAccent : Colors.purpleAccent,
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    fileName != null ? "الملف المختار: $fileName" : "اضغط هنا لرفع تسجيل الصوت من الموبايل 📤",
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: fileName != null ? FontWeight.bold : FontWeight.normal,
+                      color: fileName != null ? Colors.greenAccent : Colors.white70,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            IconButton(
+              icon: Icon(Icons.volume_up, size: 34, color: soundIdx == 1 ? Colors.purpleAccent : Colors.amber),
+              onPressed: () => _testAudio(soundIdx),
+              tooltip: "تجربة الصوت",
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: controller,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: label,
+                  isDense: true,
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );
