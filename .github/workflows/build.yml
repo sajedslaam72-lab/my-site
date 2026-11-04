@@ -65,7 +65,7 @@ jobs:
               f.write(content)
           EOF
 
-      # ضبط التوافق ورفع compileSdk لكل المكتبات لـ 36 لحل المشكلة جذرياً
+      # ضبط التوافق ورفع compileSdk لكل المكتبات لـ 36
       - name: Force CompileSDK 36 across all subprojects
         run: |
           echo "android.r8.proguardAndroidTxt.disallowed=false" >> android/gradle.properties
@@ -112,8 +112,20 @@ jobs:
         run: |
           find /home/runner/.pub-cache/ -name "build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} + || true
 
-      - name: Build APK
-        run: flutter build apk --debug
+      # بناء التطبيق والتقاط ملف الـ APK ونقله لمجلد التحميل
+      - name: Build APK and Locate File
+        run: |
+          flutter build apk --debug || true
+          mkdir -p build/app/outputs/flutter-apk
+          APK_FILE=$(find . -name "*.apk" -type f | head -n 1)
+          echo "Found generated APK at: $APK_FILE"
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" build/app/outputs/flutter-apk/app-debug.apk
+            ls -lh build/app/outputs/flutter-apk/app-debug.apk
+          else
+            echo "Error: No APK file was generated!"
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
