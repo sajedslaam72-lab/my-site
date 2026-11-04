@@ -22,9 +22,12 @@ jobs:
         with:
           channel: 'stable'
 
-      # السطر السحري: ينشئ فولدر وملفات الأندرويد تلقائياً بدون كمبيوتر
       - name: Generate Android Platform Files
         run: flutter create . --platforms=android --org com.webalance.app
+
+      - name: Fix Namespace and SDK
+        run: |
+          find android/ -name "build.gradle*" -exec sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' {} + || true
 
       - name: Get Dependencies
         run: flutter pub get
