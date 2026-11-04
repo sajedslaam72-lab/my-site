@@ -25,12 +25,17 @@ jobs:
       - name: Generate Android Platform Files
         run: flutter create . --platforms=android --org com.webalance.app
 
-      - name: Fix Namespace and SDK
+      - name: Set Min SDK Version
         run: |
           find android/ -name "build.gradle*" -exec sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' {} + || true
 
       - name: Get Dependencies
         run: flutter pub get
+
+      # السطر السحري: تصليح مشكلة جوجل واستبدال الملف القديم بالجديد
+      - name: Fix Proguard in InAppWebView
+        run: |
+          find /home/runner/.pub-cache/ -name "build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} + || true
 
       - name: Build APK
         run: flutter build apk --release
