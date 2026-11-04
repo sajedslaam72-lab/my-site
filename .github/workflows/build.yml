@@ -22,6 +22,10 @@ jobs:
         with:
           channel: 'stable'
 
+      # السطر السحري: ينشئ فولدر وملفات الأندرويد تلقائياً بدون كمبيوتر
+      - name: Generate Android Platform Files
+        run: flutter create . --platforms=android --org com.webalance.app
+
       - name: Get Dependencies
         run: flutter pub get
 
