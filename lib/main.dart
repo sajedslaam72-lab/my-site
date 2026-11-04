@@ -10,6 +10,7 @@ import 'package:file_picker/file_picker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeNotifications();
   await initializeBackgroundService();
   runApp(const WeBalanceApp());
 }
@@ -17,10 +18,17 @@ void main() async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+Future<void> initializeNotifications() async {
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings =
+      InitializationSettings(android: initializationSettingsAndroid);
+  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+}
+
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  // قناة الإشعار الدائم الصامت للخدمة
   const AndroidNotificationChannel silentChannel = AndroidNotificationChannel(
     'we_balance_channel',
     'مراقب رصيد WE',
@@ -28,7 +36,6 @@ Future<void> initializeBackgroundService() async {
     importance: Importance.low,
   );
 
-  // قناة إشعار الصفر القوي (Heads-up Notification ينزل فوق الشاشة)
   const AndroidNotificationChannel zeroChannel = AndroidNotificationChannel(
     'we_zero_balance_channel',
     'تنبيه الرصيد صفر العاجل',
@@ -85,7 +92,7 @@ void onStartBackgroundService(ServiceInstance service) async {
       if (balance >= 0) {
         await prefs.setDouble('last_balance', balance);
 
-        // تنبيه الصفر العاجل اللي مينفعش يتسكت
+        // إشعار الصفر القاطع
         if (balance <= 0.0) {
           if (!alertedZero) {
             await flutterLocalNotificationsPlugin.show(
@@ -110,7 +117,7 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_zero', false);
         }
 
-        // تشغيل صوت التنبيه الثاني لو فوق الصفر وتحت الحد الثاني
+        // تشغيل صوت التنبيه الثاني
         if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
             if (soundPath2 != null && File(soundPath2).existsSync()) {
@@ -298,7 +305,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSavedData();
   }
 
-  // طلب إذن الإشعارات لأندرويد 13+
   void _requestNotificationPermission() async {
     final androidImplementation = flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
@@ -362,7 +368,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _audioTester.play(DeviceFileSource(path));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("ارفع ملف صوتي الأول من الخانة اللي فوق عشان قيد التجربة!")),
+        const SnackBar(content: Text("ارفع ملف صوتي الأول من الخانة اللي فوق عشان تجربه!")),
       );
     }
   }
@@ -468,7 +474,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
                   const SizedBox(height: 15),
                   
-                  // التنبيه الأول: خانة الرفع فوق والمستطيل تحته بالظبط
+                  // التنبيه الأول
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الأول",
                     controller: _trigger1Controller,
@@ -477,7 +483,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const Divider(height: 28, color: Colors.white10),
 
-                  // التنبيه الثاني: خانة الرفع فوق والمستطيل تحته بالظبط
+                  // التنبيه الثاني
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الثاني (الحرج)",
                     controller: _trigger2Controller,
@@ -543,7 +549,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // التصميم المطلوب: خانة رفع الملف فوق المستطيل وزرار المكبر
   Widget _buildCustomAudioTrigger({
     required String label,
     required TextEditingController controller,
