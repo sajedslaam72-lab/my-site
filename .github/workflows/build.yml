@@ -25,8 +25,18 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
+      # السطر الرسمي لتعطيل فحص جوجل الصارم
+      - name: Bypass Proguard Check
+        run: |
+          echo "android.r8.proguardAndroidTxt.disallowed=false" >> android/gradle.properties
+
       - name: Get Dependencies
         run: flutter pub get
+
+      # تعديل مسار الملف القديم في كاش المكتبة
+      - name: Fix InAppWebView Proguard
+        run: |
+          find /home/runner/.pub-cache/ -name "build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} + || true
 
       - name: Build APK
         run: flutter build apk --debug
