@@ -25,19 +25,12 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
-      # تعطيل فحص تضارب أرقام أندرويد في مكتبة اختيار الملفات
-      - name: Disable AarMetadata Check
+      - name: Accept Android SDK Licenses & Prepare API 36
         run: |
-          cat << 'EOF' >> android/build.gradle
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-36" || true
 
-          allprojects {
-              tasks.matching { it.name.contains("AarMetadata") }.configureEach {
-                  enabled = false
-              }
-          }
-          EOF
-
-      # حقن الصلاحيات مع حل تعارض exported وإذن قراءة الصوتيات
+      # حقن الصلاحيات وخدمة الخلفية وإذن قراءة الوسائط
       - name: Configure Android Permissions and Background Service
         run: |
           python3 - << 'EOF'
@@ -72,9 +65,27 @@ jobs:
               f.write(content)
           EOF
 
-      - name: Bypass Proguard Check
+      # ضبط التوافق ورفع compileSdk لكل المكتبات لـ 36 لحل المشكلة جذرياً
+      - name: Force CompileSDK 36 across all subprojects
         run: |
           echo "android.r8.proguardAndroidTxt.disallowed=false" >> android/gradle.properties
+          cat << 'EOF' >> android/build.gradle
+
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 36
+                          if (namespace == null) {
+                              namespace project.group
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts || true
 
       - name: Enable Desugaring for Notifications
         run: |
