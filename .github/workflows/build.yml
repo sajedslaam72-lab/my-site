@@ -25,15 +25,32 @@ jobs:
       - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
 
-      # السطر الرسمي لتعطيل فحص جوجل الصارم
       - name: Bypass Proguard Check
         run: |
           echo "android.r8.proguardAndroidTxt.disallowed=false" >> android/gradle.properties
 
+      # تفعيل ميزة الـ Desugaring لمكتبة الإشعارات
+      - name: Enable Desugaring for Notifications
+        run: |
+          python3 - << 'EOF'
+          import glob
+          for path in glob.glob('android/app/build.gradle*'):
+              with open(path, 'r') as f:
+                  text = f.read()
+              if 'coreLibraryDesugaring' not in text:
+                  if path.endswith('.kts'):
+                      text = text.replace('compileOptions {', 'compileOptions {\n        isCoreLibraryDesugaringEnabled = true')
+                      text += '\ndependencies {\n    add("coreLibraryDesugaring", "com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+                  else:
+                      text = text.replace('compileOptions {', 'compileOptions {\n        coreLibraryDesugaringEnabled true')
+                      text += '\ndependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"\n}\n'
+                  with open(path, 'w') as f:
+                      f.write(text)
+          EOF
+
       - name: Get Dependencies
         run: flutter pub get
 
-      # تعديل مسار الملف القديم في كاش المكتبة
       - name: Fix InAppWebView Proguard
         run: |
           find /home/runner/.pub-cache/ -name "build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} + || true
