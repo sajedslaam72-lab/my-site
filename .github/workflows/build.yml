@@ -22,26 +22,17 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate Android Platform Files
+      - name: Generate Android Files
         run: flutter create . --platforms=android --org com.webalance.app
-
-      - name: Set Min SDK Version
-        run: |
-          find android/ -name "build.gradle*" -exec sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' {} + || true
 
       - name: Get Dependencies
         run: flutter pub get
 
-      # السطر السحري: تصليح مشكلة جوجل واستبدال الملف القديم بالجديد
-      - name: Fix Proguard in InAppWebView
-        run: |
-          find /home/runner/.pub-cache/ -name "build.gradle" -exec sed -i "s/proguard-android.txt/proguard-android-optimize.txt/g" {} + || true
-
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: we-balance-app
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
