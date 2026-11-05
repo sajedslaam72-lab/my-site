@@ -87,12 +87,9 @@ void onStartBackgroundService(ServiceInstance service) async {
 
       if (phone.isEmpty || password.isEmpty) return;
 
-      final double balance = await fetchBalanceSecurely(phone, password);
+      final double balance = prefs.getDouble('last_balance') ?? -1.0;
 
       if (balance >= 0) {
-        await prefs.setDouble('last_balance', balance);
-
-        // تنبيه الصفر العاجل (الخياط)
         if (balance <= 0.0) {
           if (!alertedZero) {
             await flutterLocalNotificationsPlugin.show(
@@ -117,7 +114,6 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_zero', false);
         }
 
-        // تشغيل صوت التنبيه الثاني
         if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
             if (soundPath2 != null && File(soundPath2).existsSync()) {
@@ -126,9 +122,7 @@ void onStartBackgroundService(ServiceInstance service) async {
             await prefs.setBool('alerted_t2', true);
             await prefs.setBool('alerted_t1', true);
           }
-        } 
-        // تشغيل صوت التنبيه الأول
-        else if (balance <= trigger1 && balance > trigger2) {
+        } else if (balance <= trigger1 && balance > trigger2) {
           if (!alertedT1) {
             if (soundPath1 != null && File(soundPath1).existsSync()) {
               await audioPlayer.play(DeviceFileSource(soundPath1));
@@ -145,162 +139,12 @@ void onStartBackgroundService(ServiceInstance service) async {
           final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
           service.setForegroundNotificationInfo(
             title: "رصيدك الحالي: $balance ج.م",
-            content: "آخر فحص ناجح كان الساعة $timeStr",
+            content: "آخر فحص كان الساعة $timeStr",
           );
         }
       }
     } catch (_) {}
   });
-}
-
-// دالة الفحص الذكية والمحدثة بآلية الضغط المتتابع
-Future<double> fetchBalanceSecurely(
-  String phone,
-  String password, {
-  void Function(String)? onLog,
-}) async {
-  final Completer<double> completer = Completer<double>();
-  HeadlessInAppWebView? headlessWebView;
-  bool isCompleted = false;
-
-  void safeFinish(double result, String reason) {
-    if (!isCompleted) {
-      isCompleted = true;
-      onLog?.call(reason);
-      completer.complete(result);
-    }
-    headlessWebView?.dispose();
-  }
-
-  onLog?.call("1. فتح صفحة WE...");
-
-  headlessWebView = HeadlessInAppWebView(
-    initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
-    initialSettings: InAppWebViewSettings(
-      userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-      javaScriptEnabled: true,
-      domStorageEnabled: true,
-      databaseEnabled: true,
-      cacheEnabled: true,
-    ),
-    onLoadStop: (controller, url) async {
-      final currentUrl = url?.toString() ?? "";
-      if (!currentUrl.contains("te.eg")) return;
-
-      onLog?.call("2. تم تحميل الصفحة..");
-
-      await Future.delayed(const Duration(seconds: 4));
-
-      // 1. ملء الحقول أولاً وتحديث الـ State
-      await controller.evaluateJavascript(source: """
-        (function() {
-          function forceType(input, text) {
-            if(!input) return;
-            input.focus();
-            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-            nativeSetter.call(input, text);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('blur', { bubbles: true }));
-          }
-
-          var u = document.getElementById('login_loginid_input_01');
-          var p = document.getElementById('login_password_input_01');
-          if(u && p) {
-            forceType(u, '$phone');
-            forceType(p, '$password');
-          }
-        })();
-      """);
-
-      onLog?.call("3. تم إدخال البيانات.. فك قفل الزرار...");
-
-      // 2. مهلة ثانية ونصف عشان Angular يفك قفل الزرار بنفسه
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      // 3. الضغط الثلاثي الجبري
-      await controller.evaluateJavascript(source: """
-        (function() {
-          var p = document.getElementById('login_password_input_01');
-          var btn = document.querySelector('button.ant-btn-primary') || 
-                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
-
-          if(btn) {
-            btn.disabled = false;
-            btn.removeAttribute('disabled');
-            btn.classList.remove('ant-btn-disabled');
-            btn.click();
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          }
-
-          // محاكاة زرار Enter في خانة الباسورد كحل إضافي
-          if(p) {
-            p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-            p.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          }
-
-          var form = document.querySelector('form');
-          if(form) {
-            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          }
-        })();
-      """);
-
-      onLog?.call("4. تم الضغط والدخول.. انتظار الداشبورد..");
-
-      await Future.delayed(const Duration(seconds: 6));
-
-      // 4. دورة فحص الرصيد (الرقم العشري المكتشف)
-      for (int i = 0; i < 15; i++) {
-        await Future.delayed(const Duration(seconds: 1));
-
-        var res = await controller.evaluateJavascript(source: """
-          (function() {
-            var allLeaves = Array.from(document.querySelectorAll('*')).filter(function(e) {
-              return e.children.length === 0 && /^\\d+\\.\\d{2}\$/.test(e.innerText.trim());
-            });
-            return allLeaves.length > 0 ? allLeaves[0].innerText.trim() : null;
-          })();
-        """);
-
-        if (res != null) {
-          String clean = res.toString().replaceAll(RegExp(r'[^0-9.]'), '');
-          double? val = double.tryParse(clean);
-          if (val != null && val >= 0) {
-            safeFinish(val, "نجاح! تم جلب الرصيد: $val ج.م");
-            return;
-          }
-        }
-      }
-
-      // قراءة رسالة الخطأ النصية الحقيقية لو وجدت
-      var pageText = await controller.evaluateJavascript(source: """
-        (function() {
-          var err = document.querySelector('.ant-message-notice') || 
-                    document.querySelector('.ant-alert-message') || 
-                    document.querySelector('.ant-form-item-explain-error') ||
-                    document.querySelector('[role="alert"]');
-          if (err && err.innerText.trim() !== "") {
-            return "رسالة من WE: " + err.innerText.trim();
-          }
-          return "الرصيد لم يظهر، عنوان الصفحة: " + window.location.hash;
-        })();
-      """);
-
-      safeFinish(-1.0, pageText?.toString() ?? "انتهى الوقت دون العثور على الرصيد");
-    },
-    onLoadError: (controller, url, code, message) => safeFinish(-1.0, "خطأ في الشبكة: $message"),
-  );
-
-  await headlessWebView.run();
-
-  return completer.future.timeout(
-    const Duration(seconds: 40),
-    onTimeout: () {
-      safeFinish(-1.0, "انتهت المهلة (40 ثانية) دون استجابة من WE");
-      return -1.0;
-    },
-  );
 }
 
 class WeBalanceApp extends StatelessWidget {
@@ -346,6 +190,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _statusMessage = "جاهز وبانتظار تفعيلك";
   final AudioPlayer _audioTester = AudioPlayer();
+
+  // وحدة المتصفح الحقيقي المدمج
+  InAppWebViewController? _webViewController;
+  bool _isWebViewReady = false;
 
   @override
   void initState() {
@@ -404,11 +252,7 @@ class _HomeScreenState extends State<HomeScreen> {
           SnackBar(content: Text("تم اختيار ملف: $name بنجاح!")),
         );
       }
-    } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("حدث خطأ أثناء اختيار الملف")),
-      );
-    }
+    } catch (_) {}
   }
 
   void _testAudio(int soundIndex) async {
@@ -422,6 +266,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // تنفيذ الفحص عبر المتصفح الحقيقي المدمج (تخطي حظر الـ Headless)
   Future<void> _saveAndCheckNow() async {
     if (_phoneController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -430,33 +275,122 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (_webViewController == null || !_isWebViewReady) {
+      setState(() => _statusMessage = "جاري تهيئة المتصفح.. انتظر ثواني واضغط مجدداً");
+      return;
+    }
+
     setState(() {
       _isLoading = true;
-      _statusMessage = "بدء الاتصال بـ WE...";
+      _statusMessage = "1. فتح الرابط في بيئة حقيقية...";
     });
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('phone', _phoneController.text.trim());
-    await prefs.setString('password', _passwordController.text.trim());
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+
+    await prefs.setString('phone', phone);
+    await prefs.setString('password', password);
     await prefs.setDouble('trigger1', double.tryParse(_trigger1Controller.text) ?? 4.10);
     await prefs.setDouble('trigger2', double.tryParse(_trigger2Controller.text) ?? 1.5);
 
-    final bal = await fetchBalanceSecurely(
-      _phoneController.text.trim(),
-      _passwordController.text.trim(),
-      onLog: (liveMessage) {
-        setState(() {
-          _statusMessage = liveMessage;
-        });
-      },
-    );
+    try {
+      // 1. الانتقال المباشر لصفحة الدخول
+      await _webViewController!.loadUrl(
+        urlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
+      );
 
-    setState(() {
-      _isLoading = false;
-      if (bal >= 0) {
-        _currentBalance = bal;
+      // انتظار استقرار الصفحة
+      await Future.delayed(const Duration(seconds: 4));
+
+      setState(() => _statusMessage = "2. إدخال البيانات المكتشفة...");
+
+      // 2. إدخال البيانات بطريقة forceType المجربة
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          function forceType(input, text) {
+            if(!input) return;
+            input.focus();
+            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            nativeSetter.call(input, text);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.blur();
+          }
+
+          var u = document.getElementById('login_loginid_input_01');
+          var p = document.getElementById('login_password_input_01');
+          if(u && p) {
+            forceType(u, '$phone');
+            forceType(p, '$password');
+          }
+        })();
+      """);
+
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      setState(() => _statusMessage = "3. الضغط على الدخول...");
+
+      // 3. الضغط على الزرار الحقيقي
+      await _webViewController!.evaluateJavascript(source: """
+        (function() {
+          var btn = document.querySelector('button.ant-btn-primary') || 
+                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
+          if(btn) {
+            btn.disabled = false;
+            btn.removeAttribute('disabled');
+            btn.click();
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          }
+        })();
+      """);
+
+      setState(() => _statusMessage = "4. انتظار الداشبورد والتحويل...");
+
+      // 4. انتظار الانتقال من صفحة #/login إلى الداشبورد
+      await Future.delayed(const Duration(seconds: 6));
+
+      // 5. دورة استخراج الرصيد
+      double foundBalance = -1.0;
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(seconds: 1));
+
+        var res = await _webViewController!.evaluateJavascript(source: """
+          (function() {
+            var allLeaves = Array.from(document.querySelectorAll('*')).filter(function(e) {
+              return e.children.length === 0 && /^\\d+\\.\\d{2}\$/.test(e.innerText.trim());
+            });
+            return allLeaves.length > 0 ? allLeaves[0].innerText.trim() : null;
+          })();
+        """);
+
+        if (res != null) {
+          String clean = res.toString().replaceAll(RegExp(r'[^0-9.]'), '');
+          double? val = double.tryParse(clean);
+          if (val != null && val >= 0) {
+            foundBalance = val;
+            break;
+          }
+        }
       }
-    });
+
+      if (foundBalance >= 0) {
+        setState(() {
+          _currentBalance = foundBalance;
+          _statusMessage = "نجاح! تم سحب الرصيد: $foundBalance ج.م";
+        });
+        await prefs.setDouble('last_balance', foundBalance);
+      } else {
+        var pageHash = await _webViewController!.evaluateJavascript(source: "window.location.hash");
+        setState(() {
+          _statusMessage = "الموقع متوقف عند: $pageHash";
+        });
+      }
+    } catch (e) {
+      setState(() => _statusMessage = "حدث خطأ: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -467,147 +401,177 @@ class _HomeScreenState extends State<HomeScreen> {
         centerTitle: true,
         backgroundColor: const Color(0xFF1E293B),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E293B),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.purple.withOpacity(0.4)),
+      body: Stack(
+        children: [
+          // المتصفح الحقيقي المدمج (بحجم نقطة واحدة في الشاشة لتجاوز حظر الـ Headless)
+          SizedBox(
+            width: 1,
+            height: 1,
+            child: InAppWebView(
+              initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
+              initialSettings: InAppWebViewSettings(
+                userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                javaScriptEnabled: true,
+                domStorageEnabled: true,
+                databaseEnabled: true,
+                cacheEnabled: true,
               ),
-              child: Column(
-                children: [
-                  const Text("الرصيد المتبقي", style: TextStyle(color: Colors.grey, fontSize: 14)),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
+              onWebViewCreated: (controller) {
+                _webViewController = controller;
+              },
+              onLoadStop: (controller, url) {
+                setState(() {
+                  _isWebViewReady = true;
+                });
+              },
+            ),
+          ),
+
+          // واجهة المستخدم الرئيسية
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              children: [
+                // بطاقة الرصيد
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.purple.withOpacity(0.4)),
+                  ),
+                  child: Column(
                     children: [
-                      Text(
-                        _currentBalance.toStringAsFixed(2),
-                        style: const TextStyle(fontSize: 44, fontWeight: FontWeight.bold),
+                      const Text("الرصيد المتبقي", style: TextStyle(color: Colors.grey, fontSize: 14)),
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            _currentBalance.toStringAsFixed(2),
+                            style: const TextStyle(fontSize: 44, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text("ج.م", style: TextStyle(fontSize: 18, color: Colors.purpleAccent)),
+                        ],
                       ),
-                      const SizedBox(width: 6),
-                      const Text("ج.م", style: TextStyle(fontSize: 18, color: Colors.purpleAccent)),
+                      const SizedBox(height: 14),
+
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F172A),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Text(
+                          _statusMessage,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            color: _statusMessage.contains("نجاح")
+                                ? Colors.greenAccent
+                                : (_statusMessage.contains("خطأ") || _statusMessage.contains("تنبيه")
+                                    ? Colors.redAccent
+                                    : Colors.cyanAccent),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 14),
+                ),
+                const SizedBox(height: 20),
 
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: Text(
-                      _statusMessage,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        color: _statusMessage.contains("نجاح")
-                            ? Colors.greenAccent
-                            : (_statusMessage.contains("خطأ") || _statusMessage.contains("تنبيه") || _statusMessage.contains("رسالة")
-                                ? Colors.redAccent
-                                : Colors.cyanAccent),
+                // إعدادات الأصوات
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("إعدادات أصوات التنبيه (تسجيلات دوبلي)",
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
+                      const SizedBox(height: 15),
+                      
+                      _buildCustomAudioTrigger(
+                        label: "مبلغ التنبيه الأول",
+                        controller: _trigger1Controller,
+                        soundIdx: 1,
+                        fileName: _sound1Name,
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
+                      const Divider(height: 28, color: Colors.white10),
 
-            // إعدادات الأصوات
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E293B),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("إعدادات أصوات التنبيه (تسجيلات دوبلي)",
-                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
-                  const SizedBox(height: 15),
-                  
-                  _buildCustomAudioTrigger(
-                    label: "مبلغ التنبيه الأول",
-                    controller: _trigger1Controller,
-                    soundIdx: 1,
-                    fileName: _sound1Name,
-                  ),
-                  const Divider(height: 28, color: Colors.white10),
-
-                  _buildCustomAudioTrigger(
-                    label: "مبلغ التنبيه الثاني (الحرج)",
-                    controller: _trigger2Controller,
-                    soundIdx: 2,
-                    fileName: _sound2Name,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // بيانات الحساب
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E293B),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: "رقم موبايل WE أو النت المنزلي",
-                      prefixIcon: Icon(Icons.phone_android),
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: _passwordController,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: "كلمة المرور",
-                      prefixIcon: Icon(Icons.lock),
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _saveAndCheckNow,
-                      icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.sync),
-                      label: _isLoading
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text("حفظ وتحديث الرصيد الآن", style: TextStyle(fontSize: 16)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.purple,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      _buildCustomAudioTrigger(
+                        label: "مبلغ التنبيه الثاني (الحرج)",
+                        controller: _trigger2Controller,
+                        soundIdx: 2,
+                        fileName: _sound2Name,
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 20),
+
+                // بيانات الحساب
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: _phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: "رقم موبايل WE أو النت المنزلي",
+                          prefixIcon: Icon(Icons.phone_android),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: "كلمة المرور",
+                          prefixIcon: Icon(Icons.lock),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _saveAndCheckNow,
+                          icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.sync),
+                          label: _isLoading
+                              ? const CircularProgressIndicator(color: Colors.white)
+                              : const Text("حفظ وتحديث الرصيد الآن", style: TextStyle(fontSize: 16)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.purple,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
