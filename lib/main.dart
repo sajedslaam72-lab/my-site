@@ -92,6 +92,7 @@ void onStartBackgroundService(ServiceInstance service) async {
       if (balance >= 0) {
         await prefs.setDouble('last_balance', balance);
 
+        // تنبيه الصفر العاجل (الخياط)
         if (balance <= 0.0) {
           if (!alertedZero) {
             await flutterLocalNotificationsPlugin.show(
@@ -116,6 +117,7 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_zero', false);
         }
 
+        // تشغيل صوت التنبيه الثاني
         if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
             if (soundPath2 != null && File(soundPath2).existsSync()) {
@@ -124,7 +126,9 @@ void onStartBackgroundService(ServiceInstance service) async {
             await prefs.setBool('alerted_t2', true);
             await prefs.setBool('alerted_t1', true);
           }
-        } else if (balance <= trigger1 && balance > trigger2) {
+        } 
+        // تشغيل صوت التنبيه الأول
+        else if (balance <= trigger1 && balance > trigger2) {
           if (!alertedT1) {
             if (soundPath1 != null && File(soundPath1).existsSync()) {
               await audioPlayer.play(DeviceFileSource(soundPath1));
@@ -149,7 +153,7 @@ void onStartBackgroundService(ServiceInstance service) async {
   });
 }
 
-// دالة الفحص المزودة برادار التشخيص المباشر
+// دالة الفحص الذكية والمحدثة بآلية الضغط المتتابع
 Future<double> fetchBalanceSecurely(
   String phone,
   String password, {
@@ -168,7 +172,7 @@ Future<double> fetchBalanceSecurely(
     headlessWebView?.dispose();
   }
 
-  onLog?.call("1. جاري فتح صفحة WE في المتصفح المخفي...");
+  onLog?.call("1. فتح صفحة WE...");
 
   headlessWebView = HeadlessInAppWebView(
     initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
@@ -183,23 +187,11 @@ Future<double> fetchBalanceSecurely(
       final currentUrl = url?.toString() ?? "";
       if (!currentUrl.contains("te.eg")) return;
 
-      onLog?.call("2. تم تحميل الصفحة: ${currentUrl.split('/').last}");
+      onLog?.call("2. تم تحميل الصفحة..");
 
       await Future.delayed(const Duration(seconds: 4));
 
-      // فحص وجود الخانات أولاً
-      var check = await controller.evaluateJavascript(source: """
-        (function() {
-          var u = document.getElementById('login_loginid_input_01');
-          var p = document.getElementById('login_password_input_01');
-          var btn = document.querySelector('button.ant-btn-primary') || document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
-          return (u ? "U_OK " : "NO_U ") + (p ? "P_OK " : "NO_P ") + (btn ? "BTN_OK" : "NO_BTN");
-        })();
-      """);
-
-      onLog?.call("3. فحص العناصر: $check");
-
-      // ملء البيانات والضغط المباشر
+      // 1. ملء الحقول أولاً وتحديث الـ State
       await controller.evaluateJavascript(source: """
         (function() {
           function forceType(input, text) {
@@ -209,41 +201,56 @@ Future<double> fetchBalanceSecurely(
             nativeSetter.call(input, text);
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.blur();
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
           }
 
           var u = document.getElementById('login_loginid_input_01');
           var p = document.getElementById('login_password_input_01');
-          var btn = document.querySelector('button.ant-btn-primary') || 
-                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
-
-          if(u && p && btn) {
+          if(u && p) {
             forceType(u, '$phone');
             forceType(p, '$password');
-            btn.click();
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
           }
         })();
       """);
 
-      onLog?.call("4. تم ملء البيانات والضغط على Login.. جاري انتظار السيرفر");
+      onLog?.call("3. تم إدخال البيانات.. فك قفل الزرار...");
 
-      await Future.delayed(const Duration(seconds: 6));
+      // 2. مهلة ثانية ونصف عشان Angular يفك قفل الزرار بنفسه
+      await Future.delayed(const Duration(milliseconds: 1500));
 
-      // فحص أين يقف الموقع الآن
-      var pageState = await controller.evaluateJavascript(source: """
+      // 3. الضغط الثلاثي الجبري
+      await controller.evaluateJavascript(source: """
         (function() {
-          return {
-            url: window.location.href,
-            title: document.title
-          };
+          var p = document.getElementById('login_password_input_01');
+          var btn = document.querySelector('button.ant-btn-primary') || 
+                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
+
+          if(btn) {
+            btn.disabled = false;
+            btn.removeAttribute('disabled');
+            btn.classList.remove('ant-btn-disabled');
+            btn.click();
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          }
+
+          // محاكاة زرار Enter في خانة الباسورد كحل إضافي
+          if(p) {
+            p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            p.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          }
+
+          var form = document.querySelector('form');
+          if(form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
         })();
       """);
 
-      String nowUrl = pageState?['url']?.toString() ?? "";
-      onLog?.call("5. عنوان الموقع الآن: ${nowUrl.split('#').last}");
+      onLog?.call("4. تم الضغط والدخول.. انتظار الداشبورد..");
 
-      // دورة فحص الرصيد
+      await Future.delayed(const Duration(seconds: 6));
+
+      // 4. دورة فحص الرصيد (الرقم العشري المكتشف)
       for (int i = 0; i < 15; i++) {
         await Future.delayed(const Duration(seconds: 1));
 
@@ -266,16 +273,21 @@ Future<double> fetchBalanceSecurely(
         }
       }
 
-      // لو لم يظهر، قراءة رسائل التنبيه أو الكابتشا الظاهرة في الصفحة
+      // قراءة رسالة الخطأ النصية الحقيقية لو وجدت
       var pageText = await controller.evaluateJavascript(source: """
         (function() {
-          var err = document.querySelector('.ant-message') || document.querySelector('.ant-alert') || document.querySelector('[class*="error"]');
-          if (err) return "تنبيه من WE: " + err.innerText;
-          return "الرصيد لم يظهر، ما زال في: " + window.location.hash;
+          var err = document.querySelector('.ant-message-notice') || 
+                    document.querySelector('.ant-alert-message') || 
+                    document.querySelector('.ant-form-item-explain-error') ||
+                    document.querySelector('[role="alert"]');
+          if (err && err.innerText.trim() !== "") {
+            return "رسالة من WE: " + err.innerText.trim();
+          }
+          return "الرصيد لم يظهر، عنوان الصفحة: " + window.location.hash;
         })();
       """);
 
-      safeFinish(-1.0, pageText?.toString() ?? "انتهت المحاولات دون العثور على الرصيد");
+      safeFinish(-1.0, pageText?.toString() ?? "انتهى الوقت دون العثور على الرصيد");
     },
     onLoadError: (controller, url, code, message) => safeFinish(-1.0, "خطأ في الشبكة: $message"),
   );
@@ -285,7 +297,7 @@ Future<double> fetchBalanceSecurely(
   return completer.future.timeout(
     const Duration(seconds: 40),
     onTimeout: () {
-      safeFinish(-1.0, "انتهت مهلة الـ 40 ثانية دون استجابة من WE");
+      safeFinish(-1.0, "انتهت المهلة (40 ثانية) دون استجابة من WE");
       return -1.0;
     },
   );
@@ -429,7 +441,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setDouble('trigger1', double.tryParse(_trigger1Controller.text) ?? 4.10);
     await prefs.setDouble('trigger2', double.tryParse(_trigger2Controller.text) ?? 1.5);
 
-    // تشغيل الفحص مع استقبال تقارير الرادار خطوة بخطوة
     final bal = await fetchBalanceSecurely(
       _phoneController.text.trim(),
       _passwordController.text.trim(),
@@ -460,7 +471,6 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            // بطاقة الرصيد والرادار الحي
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -488,7 +498,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // شريط تقرير الرادار الحي (هنا بيكتبلك كل خطوة بالمللي)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -505,7 +514,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontFamily: 'monospace',
                         color: _statusMessage.contains("نجاح")
                             ? Colors.greenAccent
-                            : (_statusMessage.contains("خطأ") || _statusMessage.contains("تنبيه")
+                            : (_statusMessage.contains("خطأ") || _statusMessage.contains("تنبيه") || _statusMessage.contains("رسالة")
                                 ? Colors.redAccent
                                 : Colors.cyanAccent),
                       ),
