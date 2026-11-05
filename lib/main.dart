@@ -18,6 +18,7 @@ void main() async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+// 1. تهيئة الإشعارات بأيقونة التطبيق الرسمية
 Future<void> initializeNotifications() async {
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -26,20 +27,23 @@ Future<void> initializeNotifications() async {
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 }
 
+// 2. إعداد خدمة الخلفية وقنوات الإشعارات
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
+  // قناة الإشعار الدائم الصامت في الستارة
   const AndroidNotificationChannel silentChannel = AndroidNotificationChannel(
     'we_balance_channel',
     'مراقب رصيد WE',
-    description: 'تنبيهات وفحص رصيد WE الدوري',
+    description: 'خدمة فحص رصيد WE الدوري في الخلفية',
     importance: Importance.low,
   );
 
+  // قناة إشعار الصفر القوي (Heads-up Notification)
   const AndroidNotificationChannel zeroChannel = AndroidNotificationChannel(
     'we_zero_balance_channel',
     'تنبيه الرصيد صفر العاجل',
-    description: 'إشعار قوي جداً عند انتهاء الرصيد بالكامل',
+    description: 'إشعار قوي جداً ينزل فوق الشاشة عند نفاد الرصيد',
     importance: Importance.max,
     playSound: true,
     enableVibration: true,
@@ -66,6 +70,7 @@ Future<void> initializeBackgroundService() async {
   );
 }
 
+// 3. كود الخدمة المستمرة في الخلفية كل ربع ساعة
 @pragma('vm:entry-point')
 void onStartBackgroundService(ServiceInstance service) async {
   final AudioPlayer audioPlayer = AudioPlayer();
@@ -75,7 +80,7 @@ void onStartBackgroundService(ServiceInstance service) async {
       final prefs = await SharedPreferences.getInstance();
       final phone = prefs.getString('phone') ?? '';
       final password = prefs.getString('password') ?? '';
-      final trigger1 = prefs.getDouble('trigger1') ?? 4.0;
+      final trigger1 = prefs.getDouble('trigger1') ?? 4.10;
       final trigger2 = prefs.getDouble('trigger2') ?? 1.5;
 
       final soundPath1 = prefs.getString('sound_path_1');
@@ -87,12 +92,13 @@ void onStartBackgroundService(ServiceInstance service) async {
 
       if (phone.isEmpty || password.isEmpty) return;
 
+      // فحص الرصيد بالمحرك المكتشف
       final double balance = await fetchBalanceSecurely(phone, password);
 
       if (balance >= 0) {
         await prefs.setDouble('last_balance', balance);
 
-        // إشعار الصفر القاطع
+        // تنبيه الصفر العاجل (الخياط)
         if (balance <= 0.0) {
           if (!alertedZero) {
             await flutterLocalNotificationsPlugin.show(
@@ -117,7 +123,7 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_zero', false);
         }
 
-        // تشغيل صوت التنبيه الثاني
+        // تشغيل صوت التنبيه الثاني (الحرج)
         if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
             if (soundPath2 != null && File(soundPath2).existsSync()) {
@@ -140,6 +146,7 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_t2', false);
         }
 
+        // تحديث إشعار الستارة الدائم
         if (service is AndroidServiceInstance) {
           final now = DateTime.now();
           final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
@@ -153,6 +160,7 @@ void onStartBackgroundService(ServiceInstance service) async {
   });
 }
 
+// 4. محرك تسجيل الدخول وسحب الرصيد النهائي المكتشف
 Future<double> fetchBalanceSecurely(String phone, String password) async {
   final Completer<double> completer = Completer<double>();
   HeadlessInAppWebView? headlessWebView;
@@ -166,54 +174,10 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
     headlessWebView?.dispose();
   }
 
-  final String loginJs = """
-    (function() {
-      function setVal(input, val) {
-        if(!input) return;
-        input.value = val;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      var u = document.querySelector('input[formcontrolname="mobileNumber"]') || document.querySelector('input[type="text"]');
-      var p = document.querySelector('input[formcontrolname="password"]') || document.querySelector('input[type="password"]');
-      if (u && p) {
-        setVal(u, '$phone');
-        setVal(p, '$password');
-        setTimeout(function() {
-          var btn = document.querySelector('button[type="submit"]') || document.querySelector('.login-btn');
-          if(btn) btn.click();
-        }, 800);
-      }
-    })();
-  """;
-
-  final String scrapeJs = """
-    (function() {
-      var tries = 0;
-      var interval = setInterval(function() {
-        tries++;
-        var el = document.querySelector('.balance-value') || 
-                 document.querySelector('.remaining-balance') || 
-                 document.querySelector('.balance-amount') ||
-                 document.querySelector('[class*="balance"]');
-        
-        if (el && el.innerText.trim() !== "") {
-          clearInterval(interval);
-          window.flutter_inappwebview.callHandler('onBalanceFound', el.innerText);
-        }
-        if (tries > 25) {
-          clearInterval(interval);
-          window.flutter_inappwebview.callHandler('onBalanceFound', null);
-        }
-      }, 500);
-    })();
-  """;
-
   headlessWebView = HeadlessInAppWebView(
-    initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/")),
+    initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
     initialSettings: InAppWebViewSettings(
-      userAgent:
-          "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
+      userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
       javaScriptEnabled: true,
       domStorageEnabled: true,
       cacheEnabled: false,
@@ -234,11 +198,64 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
       );
     },
     onLoadStop: (controller, url) async {
-      final currentUrl = url?.toString() ?? "";
-      if (currentUrl.contains("te.eg")) {
-        await controller.evaluateJavascript(source: loginJs);
-        await controller.evaluateJavascript(source: scrapeJs);
-      }
+      await Future.delayed(const Duration(seconds: 4));
+
+      // خطوة الدخول: استخدام الأسماء الحقيقية والـ Native Setter
+      await controller.evaluateJavascript(source: """
+        (function() {
+          function forceType(input, text) {
+            if(!input) return;
+            input.focus();
+            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            nativeSetter.call(input, text);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.blur();
+          }
+
+          var u = document.getElementById('login_loginid_input_01');
+          var p = document.getElementById('login_password_input_01');
+          var btn = document.querySelector('button.ant-btn-primary') || 
+                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
+
+          if(u && p && btn) {
+            forceType(u, '$phone');
+            forceType(p, '$password');
+            setTimeout(function() {
+              btn.click();
+              btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }, 600);
+          }
+        })();
+      """);
+
+      // خطوة سحب الرصيد بعد اكتمال التحميل
+      await Future.delayed(const Duration(seconds: 7));
+
+      await controller.evaluateJavascript(source: """
+        (function() {
+          var checks = 0;
+          var poll = setInterval(function() {
+            checks++;
+            // البحث عن أول رقم عشري ظاهر في الداشبورد (رقم الرصيد)
+            var allLeaves = Array.from(document.querySelectorAll('*')).filter(function(e) {
+              return e.children.length === 0 && /^\\d+\\.\\d{2}\$/.test(e.innerText.trim());
+            });
+
+            var target = allLeaves.length > 0 ? allLeaves[0] : null;
+
+            if (target && target.innerText.trim() !== "") {
+              clearInterval(poll);
+              window.flutter_inappwebview.callHandler('onBalanceFound', target.innerText.trim());
+            }
+
+            if (checks > 20) {
+              clearInterval(poll);
+              window.flutter_inappwebview.callHandler('onBalanceFound', null);
+            }
+          }, 1000);
+        })();
+      """);
     },
     onLoadError: (controller, url, code, message) => safeFinish(-1.0),
   );
@@ -246,7 +263,7 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
   await headlessWebView.run();
 
   return completer.future.timeout(
-    const Duration(seconds: 35),
+    const Duration(seconds: 40),
     onTimeout: () {
       safeFinish(-1.0);
       return -1.0;
@@ -254,13 +271,14 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
   );
 }
 
+// 5. الواجهة الرسومية الكاملة والتصميم الذكي
 class WeBalanceApp extends StatelessWidget {
   const WeBalanceApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'مراقب رصيد WE',
+      title: 'مراقب رصيد WE الذكي',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -285,7 +303,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _trigger1Controller = TextEditingController(text: "4.0");
+  final _trigger1Controller = TextEditingController(text: "4.10");
   final _trigger2Controller = TextEditingController(text: "1.5");
 
   String? _sound1Path;
@@ -295,7 +313,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   double _currentBalance = 0.0;
   bool _isLoading = false;
-  String _statusMessage = "جاهز وبانتظار البيانات";
+  String _statusMessage = "جاهز وبانتظار تفعيلك";
   final AudioPlayer _audioTester = AudioPlayer();
 
   @override
@@ -317,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _phoneController.text = prefs.getString('phone') ?? '';
       _passwordController.text = prefs.getString('password') ?? '';
-      _trigger1Controller.text = (prefs.getDouble('trigger1') ?? 4.0).toString();
+      _trigger1Controller.text = (prefs.getDouble('trigger1') ?? 4.10).toString();
       _trigger2Controller.text = (prefs.getDouble('trigger2') ?? 1.5).toString();
       _currentBalance = prefs.getDouble('last_balance') ?? 0.0;
 
@@ -368,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _audioTester.play(DeviceFileSource(path));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("ارفع ملف صوتي الأول من الخانة اللي فوق عشان تجربه!")),
+        const SnackBar(content: Text("ارفع ملف صوتي الأول عشان تجربه!")),
       );
     }
   }
@@ -383,13 +401,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _isLoading = true;
-      _statusMessage = "جاري الاتصال بـ WE وفحص الرصيد...";
+      _statusMessage = "جاري الاتصال بـ WE وسحب الرصيد الحقيقي...";
     });
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('phone', _phoneController.text.trim());
     await prefs.setString('password', _passwordController.text.trim());
-    await prefs.setDouble('trigger1', double.tryParse(_trigger1Controller.text) ?? 4.0);
+    await prefs.setDouble('trigger1', double.tryParse(_trigger1Controller.text) ?? 4.10);
     await prefs.setDouble('trigger2', double.tryParse(_trigger2Controller.text) ?? 1.5);
 
     final bal = await fetchBalanceSecurely(
@@ -420,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            // بطاقة الرصيد
+            // بطاقة الرصيد الكبيرة
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
@@ -460,7 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // تخصيص الحدود والتسجيلات
+            // تخصيص الحدود والتسجيلات بالتصميم المطلوب
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -474,7 +492,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
                   const SizedBox(height: 15),
                   
-                  // التنبيه الأول
+                  // التنبيه الأول: زرار الرفع فوق والمستطيل تحته
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الأول",
                     controller: _trigger1Controller,
@@ -483,7 +501,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const Divider(height: 28, color: Colors.white10),
 
-                  // التنبيه الثاني
+                  // التنبيه الثاني: زرار الرفع فوق والمستطيل تحته
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الثاني (الحرج)",
                     controller: _trigger2Controller,
@@ -549,6 +567,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // التصميم المطلوب: خانة رفع الملف فوق المستطيل وزرار المكبر
   Widget _buildCustomAudioTrigger({
     required String label,
     required TextEditingController controller,
@@ -558,6 +577,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 1. خانة رفع الملف فوق
         InkWell(
           onTap: () => _pickAudioFile(soundIdx),
           borderRadius: BorderRadius.circular(10),
@@ -595,6 +615,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         const SizedBox(height: 10),
+
+        // 2. مستطيل الرصيد وزرار المكبر تحته
         Row(
           children: [
             IconButton(
