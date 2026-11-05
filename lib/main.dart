@@ -18,7 +18,6 @@ void main() async {
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
-// 1. تهيئة الإشعارات بأيقونة التطبيق الرسمية
 Future<void> initializeNotifications() async {
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -27,11 +26,9 @@ Future<void> initializeNotifications() async {
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 }
 
-// 2. إعداد خدمة الخلفية وقنوات الإشعارات
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  // قناة الإشعار الدائم الصامت في الستارة
   const AndroidNotificationChannel silentChannel = AndroidNotificationChannel(
     'we_balance_channel',
     'مراقب رصيد WE',
@@ -39,11 +36,10 @@ Future<void> initializeBackgroundService() async {
     importance: Importance.low,
   );
 
-  // قناة إشعار الصفر القوي (Heads-up Notification)
   const AndroidNotificationChannel zeroChannel = AndroidNotificationChannel(
     'we_zero_balance_channel',
     'تنبيه الرصيد صفر العاجل',
-    description: 'إشعار قوي جداً ينزل فوق الشاشة عند نفاد الرصيد',
+    description: 'إشعار قوي جداً عند انتهاء الرصيد بالكامل',
     importance: Importance.max,
     playSound: true,
     enableVibration: true,
@@ -70,7 +66,6 @@ Future<void> initializeBackgroundService() async {
   );
 }
 
-// 3. كود الخدمة المستمرة في الخلفية كل ربع ساعة
 @pragma('vm:entry-point')
 void onStartBackgroundService(ServiceInstance service) async {
   final AudioPlayer audioPlayer = AudioPlayer();
@@ -92,7 +87,6 @@ void onStartBackgroundService(ServiceInstance service) async {
 
       if (phone.isEmpty || password.isEmpty) return;
 
-      // فحص الرصيد بالمحرك المكتشف
       final double balance = await fetchBalanceSecurely(phone, password);
 
       if (balance >= 0) {
@@ -123,7 +117,7 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_zero', false);
         }
 
-        // تشغيل صوت التنبيه الثاني (الحرج)
+        // تشغيل صوت التنبيه الثاني
         if (balance <= trigger2 && balance > 0.0) {
           if (!alertedT2) {
             if (soundPath2 != null && File(soundPath2).existsSync()) {
@@ -146,7 +140,6 @@ void onStartBackgroundService(ServiceInstance service) async {
           await prefs.setBool('alerted_t2', false);
         }
 
-        // تحديث إشعار الستارة الدائم
         if (service is AndroidServiceInstance) {
           final now = DateTime.now();
           final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
@@ -160,7 +153,7 @@ void onStartBackgroundService(ServiceInstance service) async {
   });
 }
 
-// 4. محرك تسجيل الدخول وسحب الرصيد النهائي المكتشف
+// محرك الفحص الذكي: مباشر وبدون أي تايمرات جافاسكريبت معلقة
 Future<double> fetchBalanceSecurely(String phone, String password) async {
   final Completer<double> completer = Completer<double>();
   HeadlessInAppWebView? headlessWebView;
@@ -180,27 +173,14 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
       userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
       javaScriptEnabled: true,
       domStorageEnabled: true,
-      cacheEnabled: false,
+      databaseEnabled: true,
+      cacheEnabled: true,
     ),
-    onWebViewCreated: (controller) {
-      controller.addJavaScriptHandler(
-        handlerName: 'onBalanceFound',
-        callback: (args) {
-          if (args.isNotEmpty && args[0] != null) {
-            String text = args[0].toString();
-            String clean = text.replaceAll(RegExp(r'[^0-9.]'), '');
-            double? val = double.tryParse(clean);
-            safeFinish(val ?? -1.0);
-          } else {
-            safeFinish(-1.0);
-          }
-        },
-      );
-    },
     onLoadStop: (controller, url) async {
+      // 1. انتظار 4 ثوانٍ لظهور خانات Angular
       await Future.delayed(const Duration(seconds: 4));
 
-      // خطوة الدخول: استخدام الأسماء الحقيقية والـ Native Setter
+      // 2. ملء البيانات والضغط الفوري المباشر (Synchronous) بدون setTimeout
       await controller.evaluateJavascript(source: """
         (function() {
           function forceType(input, text) {
@@ -221,41 +201,40 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
           if(u && p && btn) {
             forceType(u, '$phone');
             forceType(p, '$password');
-            setTimeout(function() {
-              btn.click();
-              btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            }, 600);
+            // الضغط الفوري المباشر
+            btn.click();
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
           }
         })();
       """);
 
-      // خطوة سحب الرصيد بعد اكتمال التحميل
-      await Future.delayed(const Duration(seconds: 7));
+      // 3. انتظار 5 ثوانٍ للسماح لـ WE بالتوجيه للداشبورد
+      await Future.delayed(const Duration(seconds: 5));
 
-      await controller.evaluateJavascript(source: """
-        (function() {
-          var checks = 0;
-          var poll = setInterval(function() {
-            checks++;
-            // البحث عن أول رقم عشري ظاهر في الداشبورد (رقم الرصيد)
+      // 4. دورة فحص يديرها كود Dart بالكامل (غير قابلة للتجميد من أندرويد)
+      for (int i = 0; i < 15; i++) {
+        await Future.delayed(const Duration(seconds: 1));
+
+        var res = await controller.evaluateJavascript(source: """
+          (function() {
             var allLeaves = Array.from(document.querySelectorAll('*')).filter(function(e) {
               return e.children.length === 0 && /^\\d+\\.\\d{2}\$/.test(e.innerText.trim());
             });
+            return allLeaves.length > 0 ? allLeaves[0].innerText.trim() : null;
+          })();
+        """);
 
-            var target = allLeaves.length > 0 ? allLeaves[0] : null;
+        if (res != null) {
+          String clean = res.toString().replaceAll(RegExp(r'[^0-9.]'), '');
+          double? val = double.tryParse(clean);
+          if (val != null && val >= 0) {
+            safeFinish(val);
+            return;
+          }
+        }
+      }
 
-            if (target && target.innerText.trim() !== "") {
-              clearInterval(poll);
-              window.flutter_inappwebview.callHandler('onBalanceFound', target.innerText.trim());
-            }
-
-            if (checks > 20) {
-              clearInterval(poll);
-              window.flutter_inappwebview.callHandler('onBalanceFound', null);
-            }
-          }, 1000);
-        })();
-      """);
+      safeFinish(-1.0);
     },
     onLoadError: (controller, url, code, message) => safeFinish(-1.0),
   );
@@ -271,7 +250,6 @@ Future<double> fetchBalanceSecurely(String phone, String password) async {
   );
 }
 
-// 5. الواجهة الرسومية الكاملة والتصميم الذكي
 class WeBalanceApp extends StatelessWidget {
   const WeBalanceApp({super.key});
 
@@ -438,7 +416,6 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            // بطاقة الرصيد الكبيرة
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
@@ -478,7 +455,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // تخصيص الحدود والتسجيلات بالتصميم المطلوب
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -492,7 +468,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
                   const SizedBox(height: 15),
                   
-                  // التنبيه الأول: زرار الرفع فوق والمستطيل تحته
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الأول",
                     controller: _trigger1Controller,
@@ -501,7 +476,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const Divider(height: 28, color: Colors.white10),
 
-                  // التنبيه الثاني: زرار الرفع فوق والمستطيل تحته
                   _buildCustomAudioTrigger(
                     label: "مبلغ التنبيه الثاني (الحرج)",
                     controller: _trigger2Controller,
@@ -513,7 +487,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // بيانات الحساب
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -567,7 +540,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // التصميم المطلوب: خانة رفع الملف فوق المستطيل وزرار المكبر
   Widget _buildCustomAudioTrigger({
     required String label,
     required TextEditingController controller,
@@ -577,7 +549,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 1. خانة رفع الملف فوق
         InkWell(
           onTap: () => _pickAudioFile(soundIdx),
           borderRadius: BorderRadius.circular(10),
@@ -615,8 +586,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         const SizedBox(height: 10),
-
-        // 2. مستطيل الرصيد وزرار المكبر تحته
         Row(
           children: [
             IconButton(
