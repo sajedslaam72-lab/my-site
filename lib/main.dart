@@ -73,8 +73,6 @@ void onStartBackgroundService(ServiceInstance service) async {
   Timer.periodic(const Duration(minutes: 15), (timer) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final phone = prefs.getString('phone') ?? '';
-      final password = prefs.getString('password') ?? '';
       final trigger1 = prefs.getDouble('trigger1') ?? 4.10;
       final trigger2 = prefs.getDouble('trigger2') ?? 1.5;
 
@@ -84,8 +82,6 @@ void onStartBackgroundService(ServiceInstance service) async {
       bool alertedT1 = prefs.getBool('alerted_t1') ?? false;
       bool alertedT2 = prefs.getBool('alerted_t2') ?? false;
       bool alertedZero = prefs.getBool('alerted_zero') ?? false;
-
-      if (phone.isEmpty || password.isEmpty) return;
 
       final double balance = prefs.getDouble('last_balance') ?? -1.0;
 
@@ -191,7 +187,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String _statusMessage = "جاهز وبانتظار تفعيلك";
   final AudioPlayer _audioTester = AudioPlayer();
 
-  // وحدة المتصفح الحقيقي المدمج
   InAppWebViewController? _webViewController;
   bool _isWebViewReady = false;
 
@@ -266,7 +261,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // تنفيذ الفحص عبر المتصفح الحقيقي المدمج (تخطي حظر الـ Headless)
   Future<void> _saveAndCheckNow() async {
     if (_phoneController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -282,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _isLoading = true;
-      _statusMessage = "1. فتح الرابط في بيئة حقيقية...";
+      _statusMessage = "1. الدخول لحسابك في WE...";
     });
 
     final prefs = await SharedPreferences.getInstance();
@@ -295,17 +289,14 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setDouble('trigger2', double.tryParse(_trigger2Controller.text) ?? 1.5);
 
     try {
-      // 1. الانتقال المباشر لصفحة الدخول
       await _webViewController!.loadUrl(
         urlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
       );
 
-      // انتظار استقرار الصفحة
       await Future.delayed(const Duration(seconds: 4));
 
-      setState(() => _statusMessage = "2. إدخال البيانات المكتشفة...");
+      setState(() => _statusMessage = "2. كتابة البيانات...");
 
-      // 2. إدخال البيانات بطريقة forceType المجربة
       await _webViewController!.evaluateJavascript(source: """
         (function() {
           function forceType(input, text) {
@@ -329,9 +320,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await Future.delayed(const Duration(milliseconds: 1500));
 
-      setState(() => _statusMessage = "3. الضغط على الدخول...");
+      setState(() => _statusMessage = "3. الضغط على Login...");
 
-      // 3. الضغط على الزرار الحقيقي
       await _webViewController!.evaluateJavascript(source: """
         (function() {
           var btn = document.querySelector('button.ant-btn-primary') || 
@@ -345,22 +335,32 @@ class _HomeScreenState extends State<HomeScreen> {
         })();
       """);
 
-      setState(() => _statusMessage = "4. انتظار الداشبورد والتحويل...");
+      setState(() => _statusMessage = "4. تم الدخول! جاري تحميل الداشبورد...");
 
-      // 4. انتظار الانتقال من صفحة #/login إلى الداشبورد
-      await Future.delayed(const Duration(seconds: 6));
+      // انتظار 7 ثوانٍ لاستقرار صفحة accountoverview ورسم كارت الرصيد
+      await Future.delayed(const Duration(seconds: 7));
 
-      // 5. دورة استخراج الرصيد
       double foundBalance = -1.0;
-      for (int i = 0; i < 15; i++) {
+      for (int i = 0; i < 20; i++) {
         await Future.delayed(const Duration(seconds: 1));
 
         var res = await _webViewController!.evaluateJavascript(source: """
           (function() {
-            var allLeaves = Array.from(document.querySelectorAll('*')).filter(function(e) {
-              return e.children.length === 0 && /^\\d+\\.\\d{2}\$/.test(e.innerText.trim());
+            // البحث عن أي عنصر يحتوي على رقم عشري داخل الداشبورد
+            var allElements = Array.from(document.querySelectorAll('*')).filter(function(e) {
+              var t = e.innerText ? e.innerText.trim() : '';
+              return e.children.length === 0 && /^\\d+(\\.\\d{1,2})?\$/.test(t) && parseFloat(t) < 5000;
             });
-            return allLeaves.length > 0 ? allLeaves[0].innerText.trim() : null;
+
+            if (allElements.length > 0) {
+              return allElements[0].innerText.trim();
+            }
+
+            // فحص إضافي: البحث عن أي نص يحتوي على أرقام عشرية
+            var matches = document.body.innerText.match(/\\b\\d+\\.\\d{2}\\b/);
+            if (matches) return matches[0];
+
+            return null;
           })();
         """);
 
@@ -383,7 +383,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         var pageHash = await _webViewController!.evaluateJavascript(source: "window.location.hash");
         setState(() {
-          _statusMessage = "الموقع متوقف عند: $pageHash";
+          _statusMessage = "وصل لـ $pageHash لكن الرصيد استغرق وقتاً أطول";
         });
       }
     } catch (e) {
@@ -401,177 +401,176 @@ class _HomeScreenState extends State<HomeScreen> {
         centerTitle: true,
         backgroundColor: const Color(0xFF1E293B),
       ),
-      body: Stack(
-        children: [
-          // المتصفح الحقيقي المدمج (بحجم نقطة واحدة في الشاشة لتجاوز حظر الـ Headless)
-          SizedBox(
-            width: 1,
-            height: 1,
-            child: InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
-              initialSettings: InAppWebViewSettings(
-                userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-                javaScriptEnabled: true,
-                domStorageEnabled: true,
-                databaseEnabled: true,
-                cacheEnabled: true,
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            // بطاقة الرصيد
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.purple.withOpacity(0.4)),
               ),
-              onWebViewCreated: (controller) {
-                _webViewController = controller;
-              },
-              onLoadStop: (controller, url) {
-                setState(() {
-                  _isWebViewReady = true;
-                });
-              },
+              child: Column(
+                children: [
+                  const Text("الرصيد المتبقي", style: TextStyle(color: Colors.grey, fontSize: 14)),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        _currentBalance.toStringAsFixed(2),
+                        style: const TextStyle(fontSize: 44, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text("ج.م", style: TextStyle(fontSize: 18, color: Colors.purpleAccent)),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Text(
+                      _statusMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: _statusMessage.contains("نجاح")
+                            ? Colors.greenAccent
+                            : Colors.cyanAccent,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+            const SizedBox(height: 20),
 
-          // واجهة المستخدم الرئيسية
-          SingleChildScrollView(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              children: [
-                // بطاقة الرصيد
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.purple.withOpacity(0.4)),
+            // إعدادات الأصوات
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("إعدادات أصوات التنبيه (تسجيلات دوبلي)",
+                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
+                  const SizedBox(height: 15),
+                  
+                  _buildCustomAudioTrigger(
+                    label: "مبلغ التنبيه الأول",
+                    controller: _trigger1Controller,
+                    soundIdx: 1,
+                    fileName: _sound1Name,
                   ),
-                  child: Column(
-                    children: [
-                      const Text("الرصيد المتبقي", style: TextStyle(color: Colors.grey, fontSize: 14)),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.baseline,
-                        textBaseline: TextBaseline.alphabetic,
-                        children: [
-                          Text(
-                            _currentBalance.toStringAsFixed(2),
-                            style: const TextStyle(fontSize: 44, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(width: 6),
-                          const Text("ج.م", style: TextStyle(fontSize: 18, color: Colors.purpleAccent)),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
+                  const Divider(height: 28, color: Colors.white10),
 
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0F172A),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white10),
-                        ),
-                        child: Text(
-                          _statusMessage,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            color: _statusMessage.contains("نجاح")
-                                ? Colors.greenAccent
-                                : (_statusMessage.contains("خطأ") || _statusMessage.contains("تنبيه")
-                                    ? Colors.redAccent
-                                    : Colors.cyanAccent),
-                          ),
-                        ),
-                      ),
-                    ],
+                  _buildCustomAudioTrigger(
+                    label: "مبلغ التنبيه الثاني (الحرج)",
+                    controller: _trigger2Controller,
+                    soundIdx: 2,
+                    fileName: _sound2Name,
                   ),
-                ),
-                const SizedBox(height: 20),
-
-                // إعدادات الأصوات
-                Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("إعدادات أصوات التنبيه (تسجيلات دوبلي)",
-                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purpleAccent)),
-                      const SizedBox(height: 15),
-                      
-                      _buildCustomAudioTrigger(
-                        label: "مبلغ التنبيه الأول",
-                        controller: _trigger1Controller,
-                        soundIdx: 1,
-                        fileName: _sound1Name,
-                      ),
-                      const Divider(height: 28, color: Colors.white10),
-
-                      _buildCustomAudioTrigger(
-                        label: "مبلغ التنبيه الثاني (الحرج)",
-                        controller: _trigger2Controller,
-                        soundIdx: 2,
-                        fileName: _sound2Name,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // بيانات الحساب
-                Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    children: [
-                      TextField(
-                        controller: _phoneController,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(
-                          labelText: "رقم موبايل WE أو النت المنزلي",
-                          prefixIcon: Icon(Icons.phone_android),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      TextField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        decoration: const InputDecoration(
-                          labelText: "كلمة المرور",
-                          prefixIcon: Icon(Icons.lock),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 52,
-                        child: ElevatedButton.icon(
-                          onPressed: _isLoading ? null : _saveAndCheckNow,
-                          icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.sync),
-                          label: _isLoading
-                              ? const CircularProgressIndicator(color: Colors.white)
-                              : const Text("حفظ وتحديث الرصيد الآن", style: TextStyle(fontSize: 16)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.purple,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 20),
+
+            // بيانات الحساب
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: "رقم موبايل WE أو النت المنزلي",
+                      prefixIcon: Icon(Icons.phone_android),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: "كلمة المرور",
+                      prefixIcon: Icon(Icons.lock),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton.icon(
+                      onPressed: _isLoading ? null : _saveAndCheckNow,
+                      icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.sync),
+                      label: _isLoading
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : const Text("حفظ وتحديث الرصيد الآن", style: TextStyle(fontSize: 16)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // المتصفح الحقيقي بمساحة فعلية كاملة في الشاشة (عشان WE يرسم كارت الرصيد)
+            Container(
+              height: 260,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white10),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InAppWebView(
+                initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
+                initialSettings: InAppWebViewSettings(
+                  userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                  javaScriptEnabled: true,
+                  domStorageEnabled: true,
+                  databaseEnabled: true,
+                  cacheEnabled: true,
+                ),
+                onWebViewCreated: (controller) {
+                  _webViewController = controller;
+                },
+                onLoadStop: (controller, url) {
+                  setState(() {
+                    _isWebViewReady = true;
+                  });
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
