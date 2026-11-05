@@ -276,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _isLoading = true;
-      _statusMessage = "1. الدخول لحسابك في WE...";
+      _statusMessage = "1. فحص الاتصال بحساب WE...";
     });
 
     final prefs = await SharedPreferences.getInstance();
@@ -289,64 +289,84 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setDouble('trigger2', double.tryParse(_trigger2Controller.text) ?? 1.5);
 
     try {
+      // 1. الانتقال المباشر لصفحة الحساب
       await _webViewController!.loadUrl(
-        urlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
+        urlRequest: URLRequest(url: WebUri("https://my.te.eg/#/accountoverview")),
       );
 
       await Future.delayed(const Duration(seconds: 4));
 
-      setState(() => _statusMessage = "2. كتابة البيانات...");
+      // فحص هل الحساب مسجل دخول أصلاً أم في صفحة Login؟
+      var currentHash = await _webViewController!.evaluateJavascript(source: "window.location.hash");
+      String hashStr = currentHash?.toString() ?? "";
 
+      // لو طلب تسجيل دخول نملأ البيانات
+      if (hashStr.contains("login")) {
+        setState(() => _statusMessage = "2. تسجيل الدخول بالبيانات...");
+
+        await _webViewController!.evaluateJavascript(source: """
+          (function() {
+            function forceType(input, text) {
+              if(!input) return;
+              input.focus();
+              var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+              nativeSetter.call(input, text);
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              input.blur();
+            }
+
+            var u = document.getElementById('login_loginid_input_01');
+            var p = document.getElementById('login_password_input_01');
+            if(u && p) {
+              forceType(u, '$phone');
+              forceType(p, '$password');
+            }
+          })();
+        """);
+
+        await Future.delayed(const Duration(milliseconds: 1500));
+
+        await _webViewController!.evaluateJavascript(source: """
+          (function() {
+            var btn = document.querySelector('button.ant-btn-primary') || 
+                      document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
+            if(btn) {
+              btn.disabled = false;
+              btn.removeAttribute('disabled');
+              btn.click();
+              btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            }
+          })();
+        """);
+
+        setState(() => _statusMessage = "3. تم الدخول! انتظار الداشبورد...");
+        await Future.delayed(const Duration(seconds: 6));
+      }
+
+      // 2. كسر أي تحويل لصفحات رخمة وتوجيهه للداشبورد إجبارياً
       await _webViewController!.evaluateJavascript(source: """
         (function() {
-          function forceType(input, text) {
-            if(!input) return;
-            input.focus();
-            var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-            nativeSetter.call(input, text);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.blur();
+          if (window.location.hash.indexOf('accountoverview') === -1) {
+            window.location.hash = '#/accountoverview';
           }
-
-          var u = document.getElementById('login_loginid_input_01');
-          var p = document.getElementById('login_password_input_01');
-          if(u && p) {
-            forceType(u, '$phone');
-            forceType(p, '$password');
-          }
+          // محاولة إغلاق أي إعلانات أو نوافذ منبثقة
+          var closeBtn = document.querySelector('.ant-modal-close') || 
+                         document.querySelector('[aria-label="Close"]') ||
+                         document.querySelector('.close-btn');
+          if (closeBtn) closeBtn.click();
         })();
       """);
 
-      await Future.delayed(const Duration(milliseconds: 1500));
+      await Future.delayed(const Duration(seconds: 3));
 
-      setState(() => _statusMessage = "3. الضغط على Login...");
-
-      await _webViewController!.evaluateJavascript(source: """
-        (function() {
-          var btn = document.querySelector('button.ant-btn-primary') || 
-                    document.querySelector('.ec_button_ant-btn-primary_U5RfnT');
-          if(btn) {
-            btn.disabled = false;
-            btn.removeAttribute('disabled');
-            btn.click();
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          }
-        })();
-      """);
-
-      setState(() => _statusMessage = "4. تم الدخول! جاري تحميل الداشبورد...");
-
-      // انتظار 7 ثوانٍ لاستقرار صفحة accountoverview ورسم كارت الرصيد
-      await Future.delayed(const Duration(seconds: 7));
-
+      // 3. دورة استخراج الرصيد
       double foundBalance = -1.0;
       for (int i = 0; i < 20; i++) {
         await Future.delayed(const Duration(seconds: 1));
 
         var res = await _webViewController!.evaluateJavascript(source: """
           (function() {
-            // البحث عن أي عنصر يحتوي على رقم عشري داخل الداشبورد
             var allElements = Array.from(document.querySelectorAll('*')).filter(function(e) {
               var t = e.innerText ? e.innerText.trim() : '';
               return e.children.length === 0 && /^\\d+(\\.\\d{1,2})?\$/.test(t) && parseFloat(t) < 5000;
@@ -356,7 +376,6 @@ class _HomeScreenState extends State<HomeScreen> {
               return allElements[0].innerText.trim();
             }
 
-            // فحص إضافي: البحث عن أي نص يحتوي على أرقام عشرية
             var matches = document.body.innerText.match(/\\b\\d+\\.\\d{2}\\b/);
             if (matches) return matches[0];
 
@@ -383,7 +402,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         var pageHash = await _webViewController!.evaluateJavascript(source: "window.location.hash");
         setState(() {
-          _statusMessage = "وصل لـ $pageHash لكن الرصيد استغرق وقتاً أطول";
+          _statusMessage = "تم التخطي بنجاح لكن الرصيد يحتاج ثوانٍ إضافية ($pageHash)";
         });
       }
     } catch (e) {
@@ -405,7 +424,6 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            // بطاقة الرصيد
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -541,7 +559,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 20),
 
-            // المتصفح الحقيقي بمساحة فعلية كاملة في الشاشة (عشان WE يرسم كارت الرصيد)
+            // المتصفح الحقيقي المدمج
             Container(
               height: 260,
               width: double.infinity,
@@ -551,7 +569,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               clipBehavior: Clip.antiAlias,
               child: InAppWebView(
-                initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/login")),
+                initialUrlRequest: URLRequest(url: WebUri("https://my.te.eg/#/accountoverview")),
                 initialSettings: InAppWebViewSettings(
                   userAgent: "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                   javaScriptEnabled: true,
